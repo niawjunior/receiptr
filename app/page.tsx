@@ -389,12 +389,7 @@ export default function Home() {
               >
                 Clear
               </Button>
-              <Button
-                onClick={handleExportSlips}
-                disabled={processedSlips.length === 0}
-              >
-                Export as CSV
-              </Button>
+
               <Button
                 onClick={handleUpload}
                 disabled={!files || files.length === 0 || isUploading}
