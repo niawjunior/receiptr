@@ -381,7 +381,7 @@ export default function Home() {
                 </div>
               </div>
             </CardContent>
-            <CardFooter className="flex justify-between">
+            <CardFooter className="grid md:grid-cols-2 gap-2">
               <Button
                 variant="outline"
                 onClick={() => setFiles(undefined)}
@@ -415,7 +415,7 @@ export default function Home() {
                 </div>
               </div>
             </CardContent>
-            <CardFooter className="flex justify-between">
+            <CardFooter className="grid md:grid-cols-2 gap-2">
               <Button variant="outline" onClick={() => setActiveTab("upload")}>
                 Back
               </Button>
@@ -588,20 +588,18 @@ export default function Home() {
                 </div>
               )}
             </CardContent>
-            <CardFooter className="flex justify-between">
+            <CardFooter className="grid md:grid-cols-3 auto-cols-fr gap-2">
               <Button variant="outline" onClick={() => setActiveTab("process")}>
                 Back
               </Button>
-              <div className="flex gap-2">
-                {processedSlips.length > 0 && (
-                  <Button variant="outline" onClick={handleExportSlips}>
-                    Export as CSV ({processedSlips.length})
-                  </Button>
-                )}
-                <Button onClick={handleAddAnotherSlip}>
-                  Process Another Slip
+              {processedSlips.length > 0 && (
+                <Button variant="outline" onClick={handleExportSlips}>
+                  Export as CSV ({processedSlips.length})
                 </Button>
-              </div>
+              )}
+              <Button onClick={handleAddAnotherSlip}>
+                Process Another Slip
+              </Button>
             </CardFooter>
           </Card>
         </TabsContent>
