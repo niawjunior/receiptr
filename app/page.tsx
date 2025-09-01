@@ -106,7 +106,7 @@ export default function Home() {
       // Clear preview URL if no files
       setPreviewUrl(null);
     }
-  }, [files, previewUrl]);
+  }, [files]);
 
   const handleFileChange = (acceptedFiles: File[]) => {
     setFiles(acceptedFiles);
