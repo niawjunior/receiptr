@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
 
     const params = {
       model: "typhoon-ocr-preview",
-      task_type: "default",
+      task_type: "structure",
       max_tokens: 16000,
       temperature: 0.1,
       top_p: 0.6,

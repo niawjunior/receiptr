@@ -11,13 +11,6 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Dropzone,
   DropzoneContent,
   DropzoneEmptyState,
@@ -35,38 +28,57 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 
-// Define the structure for SCB slip data
+// Define the structure for slip data
 interface SCBSlipData {
-  bank: string;
+  source_id: string;
+  file_name: string;
+  bank_from: string;
+  bank_to: string;
   status: string;
-  date_time: string;
-  transaction_reference: string;
-  from: {
+  date_time_text: string;
+  date_time_iso: string;
+  from?: {
     name: string;
     account_number: string;
   };
-  to: {
+  to?: {
     name: string;
+    account_number: string;
     biller_id?: string;
     store_code?: string;
     transaction_code?: string;
   };
   amount: number;
   currency: string;
-  qr_code?: string;
+  fee: number;
+  transaction_reference: string;
+  reference_number: string;
+  reference_code: string;
+  qr_code: string;
+}
+
+// Define the structure for extracted text data
+interface ExtractedTextData {
+  id: string;
+  text: string;
+  fileName: string;
+  fileSize: number;
 }
 
 export default function Home() {
   const [files, setFiles] = useState<File[] | undefined>();
   const [isUploading, setIsUploading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [extractedText, setExtractedText] = useState<string | null>(null);
-  const [slipData, setSlipData] = useState<SCBSlipData | null>(null);
+  const [extractedTexts, setExtractedTexts] = useState<ExtractedTextData[]>([]);
+  const [selectedTextIndex, setSelectedTextIndex] = useState<number>(0);
+  const [slipData, setSlipData] = useState<SCBSlipData[] | null>(null);
   const [processedSlips, setProcessedSlips] = useState<SCBSlipData[]>([]);
   const [activeTab, setActiveTab] = useState("upload");
-  const [slipType, setSlipType] = useState("scb");
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
+  const [selectedPreviewIndex, setSelectedPreviewIndex] = useState<number>(0);
   const customFields = [
     { name: "to.name", originalField: "to.name", displayName: "Recipient" },
     {
@@ -86,67 +98,144 @@ export default function Home() {
     },
   ];
 
-  // Generate preview URL when files change
+  // Generate preview URLs when files change
   useEffect(() => {
     if (files && files.length > 0) {
-      // Revoke previous preview URL to avoid memory leaks
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl);
-      }
+      // Revoke previous preview URLs to avoid memory leaks
+      previewUrls.forEach((url) => {
+        URL.revokeObjectURL(url);
+      });
 
-      // Create a new preview URL for the first file
-      const objectUrl = URL.createObjectURL(files[0]);
-      setPreviewUrl(objectUrl);
+      // Create new preview URLs for all files (up to 5)
+      const newPreviewUrls = Array.from(files)
+        .slice(0, 5)
+        .map((file) => {
+          return URL.createObjectURL(file);
+        });
 
-      // Clean up function to revoke the URL when component unmounts or files change
+      setPreviewUrls(newPreviewUrls);
+      setSelectedPreviewIndex(0); // Reset to first image
+
+      // Clean up function to revoke URLs when component unmounts or files change
       return () => {
-        URL.revokeObjectURL(objectUrl);
+        newPreviewUrls.forEach((url) => {
+          URL.revokeObjectURL(url);
+        });
       };
     } else {
-      // Clear preview URL if no files
-      setPreviewUrl(null);
+      // Clear preview URLs if no files
+      setPreviewUrls([]);
     }
   }, [files]);
 
   const handleFileChange = (acceptedFiles: File[]) => {
-    setFiles(acceptedFiles);
+    setFiles((prevFiles) => {
+      // If no previous files, just use the new ones
+      if (!prevFiles || prevFiles.length === 0) {
+        return acceptedFiles;
+      }
+
+      // Combine existing files with new ones
+      const combinedFiles = [...prevFiles, ...acceptedFiles];
+
+      // Limit to 5 files maximum
+      const limitedFiles = combinedFiles.slice(0, 5);
+
+      // Show toast if files were limited
+      if (combinedFiles.length > 5) {
+        toast.info(
+          `Only 5 files allowed. ${
+            combinedFiles.length - 5
+          } file(s) were not added.`
+        );
+      }
+
+      return limitedFiles;
+    });
   };
 
   const handleUpload = async () => {
-    if (!files || files.length === 0) return;
+    if (!files || files.length === 0) {
+      toast.error("Please select a file");
+      return;
+    }
 
     setIsUploading(true);
+    // Clear any previous extracted texts
+    setExtractedTexts([]);
 
     try {
-      // Create form data for the API request
-      const formData = new FormData();
-      formData.append("file", files[0]);
+      let processedCount = 0;
+      let successCount = 0;
 
-      // Call our OCR API endpoint
-      const response = await fetch("/api/ocr", {
-        method: "POST",
-        body: formData,
-      });
+      // Process each file sequentially for OCR only
+      for (const file of files) {
+        try {
+          // Update processing status
+          toast.info(
+            `Extracting text from image ${processedCount + 1} of ${
+              files.length
+            }`
+          );
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to extract text");
+          // Create form data for this file
+          const formData = new FormData();
+          formData.append("file", file);
+
+          // OCR API call
+          const ocrResponse = await fetch("/api/ocr", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!ocrResponse.ok) {
+            const errorData = await ocrResponse.json();
+            throw new Error(errorData.error || "Failed to extract text");
+          }
+
+          const ocrData = await ocrResponse.json();
+
+          // Store extracted text from OCR response as an object
+          setExtractedTexts((prev) => [
+            ...prev,
+            {
+              id: `slip-${Date.now()}-${processedCount}`,
+              text: ocrData.text,
+              fileName: file.name,
+              fileSize: file.size,
+            },
+          ]);
+          successCount++;
+          processedCount++;
+        } catch (error) {
+          console.error(
+            `Error extracting text from image ${processedCount + 1}:`,
+            error
+          );
+          toast.error(
+            `Error extracting text from image ${processedCount + 1}`,
+            {
+              description:
+                error instanceof Error ? error.message : String(error),
+            }
+          );
+          processedCount++;
+        }
       }
 
-      const data = await response.json();
-      const text = data.text;
-
-      if (text) {
-        setExtractedText(text);
+      // Navigate to process page if any texts were successfully extracted
+      if (successCount > 0) {
         setActiveTab("process");
-        toast.success("The text has been extracted from your slip.");
+        toast.success(
+          `Successfully extracted text from ${successCount} of ${files.length} images`
+        );
       } else {
-        throw new Error("Failed to extract text");
+        toast.error("No text could be extracted from the images");
       }
     } catch (error) {
-      console.error("Error extracting text:", error);
-      toast.error("Error extracting text", {
-        description: "There was a problem extracting text from your slip.",
+      console.error("Error in OCR processing:", error);
+      toast.error("Error in OCR processing", {
+        description: error instanceof Error ? error.message : String(error),
       });
     } finally {
       setIsUploading(false);
@@ -154,10 +243,9 @@ export default function Home() {
   };
 
   const handleProcess = async () => {
-    if (!extractedText) return;
+    if (extractedTexts.length === 0) return;
 
     setIsProcessing(true);
-
     try {
       // Call our AI classification API endpoint
       const classifyResponse = await fetch("/api/classify", {
@@ -165,7 +253,9 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ text: extractedText }),
+        body: JSON.stringify({
+          texts: extractedTexts,
+        }),
       });
 
       if (!classifyResponse.ok) {
@@ -173,20 +263,25 @@ export default function Home() {
         throw new Error(errorData.error || "Failed to classify text");
       }
 
-      const data: SCBSlipData = await classifyResponse.json();
-      setSlipData(data);
+      const data: { slips: SCBSlipData[] } = await classifyResponse.json();
+      setSlipData(data.slips);
 
       // Add the processed slip to our collection
-      setProcessedSlips((prev) => [...prev, data]);
+      setProcessedSlips((prev) => [...prev, ...data.slips]);
 
       setActiveTab("result");
       toast.success("Processing complete", {
-        description: "The slip has been processed successfully.",
+        description: `Slip ${
+          selectedTextIndex + 1
+        } has been processed successfully.`,
       });
     } catch (error) {
       console.error("Error processing text:", error);
       toast.error("Error processing text", {
-        description: "There was a problem classifying the extracted text.",
+        description:
+          error instanceof Error
+            ? error.message
+            : "There was a problem classifying the extracted text.",
       });
     } finally {
       setIsProcessing(false);
@@ -197,30 +292,39 @@ export default function Home() {
   const handleAddAnotherSlip = () => {
     // Reset for next slip
     setFiles(undefined);
-    setPreviewUrl(null);
-    setExtractedText(null);
-    setSlipData(null);
+    setPreviewUrls([]);
+    setSelectedPreviewIndex(0);
+    setExtractedTexts([]);
+    setSelectedTextIndex(0);
+    setSlipData([]);
     setActiveTab("upload");
     toast.success("Ready for next slip", {
       description: "You can now upload another slip.",
     });
   };
 
-  // Convert slips data to CSV format
-  const convertToCSV = (slips: SCBSlipData[]) => {
-    if (slips.length === 0) return "";
-
-    // Define CSV headers
+  // Generate CSV from slip data
+  const generateCSV = (slips: SCBSlipData[]): string => {
+    // Define headers
     const headers = [
-      "Bank",
+      "Source ID",
+      "File Name",
+      "Bank From",
+      "Bank To",
       "Status",
-      "Date/Time",
-      "Reference",
+      "Date/Time Text",
+      "Date/Time ISO",
+      "Reference Number",
+      "Transaction Reference",
+      "Reference Code",
       "Amount",
+      "Fee",
       "Currency",
+      "QR Code",
       "From Name",
       "From Account",
       "To Name",
+      "To Account",
       "To Biller ID",
       "To Store Code",
       "To Transaction Code",
@@ -233,18 +337,27 @@ export default function Home() {
     slips.forEach((slip) => {
       const row = [
         // Escape values that might contain commas
-        `"${slip.bank || ""}"`,
+        `"${slip.source_id || ""}"`,
+        `"${slip.file_name || ""}"`,
+        `"${slip.bank_from || ""}"`,
+        `"${slip.bank_to || ""}"`,
         `"${slip.status || ""}"`,
-        `"${slip.date_time || ""}"`,
+        `"${slip.date_time_text || ""}"`,
+        `"${slip.date_time_iso || ""}"`,
+        `"${slip.reference_number || ""}"`,
         `"${slip.transaction_reference || ""}"`,
+        `"${slip.reference_code || ""}"`,
         slip.amount,
+        slip.fee,
         `"${slip.currency || ""}"`,
-        `"${slip.from.name || ""}"`,
-        `"${slip.from.account_number || ""}"`,
-        `"${slip.to.name || ""}"`,
-        `"${slip.to.biller_id || ""}"`,
-        `"${slip.to.store_code || ""}"`,
-        `"${slip.to.transaction_code || ""}"`,
+        `"${slip.qr_code || ""}"`,
+        `"${slip.from?.name || ""}"`,
+        `"${slip.from?.account_number || ""}"`,
+        `"${slip.to?.name || ""}"`,
+        `"${slip.to?.account_number || ""}"`,
+        `"${slip.to?.biller_id || ""}"`,
+        `"${slip.to?.store_code || ""}"`,
+        `"${slip.to?.transaction_code || ""}"`,
       ];
       csvContent += row.join(",") + "\n";
     });
@@ -257,7 +370,7 @@ export default function Home() {
     if (processedSlips.length === 0) return;
 
     // Generate CSV content
-    const csvContent = convertToCSV(processedSlips);
+    const csvContent = generateCSV(processedSlips);
 
     // Create blob and download
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -285,7 +398,7 @@ export default function Home() {
     <div className="container mx-auto py-8 px-4">
       <div className="flex flex-col items-center justify-center mb-8">
         <h1 className="text-3xl font-bold mb-2">Sliptr</h1>
-        <p className="text-muted-foreground text-center max-w-md">
+        <p className="text-muted-foreground text-center">
           Upload your slip image and let AI extract, classify, and organize the
           information for you.
         </p>
@@ -298,7 +411,7 @@ export default function Home() {
       >
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="upload">Upload</TabsTrigger>
-          <TabsTrigger value="process" disabled={!extractedText}>
+          <TabsTrigger value="process" disabled={extractedTexts.length === 0}>
             Process
           </TabsTrigger>
           <TabsTrigger value="result" disabled={!slipData}>
@@ -311,33 +424,42 @@ export default function Home() {
             <CardHeader>
               <CardTitle>Upload Slip</CardTitle>
               <CardDescription>
-                Select slip type and upload an image to extract information.
+                Upload a bank slip image to extract information.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid w-full items-center gap-4">
                 <div className="mb-4">
-                  <Label htmlFor="slip-type">Slip Type</Label>
-                  <Select value={slipType} onValueChange={setSlipType}>
-                    <SelectTrigger className="mt-1 w-full">
-                      <SelectValue placeholder="Select bank" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="scb">
-                        SCB (Siam Commercial Bank)
-                      </SelectItem>
-                      {/* Add more bank options in the future */}
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="supported-banks">Supported Banks</Label>
+                  <div className="mt-2 p-3 border rounded-md bg-muted/20">
+                    <p className="text-sm">
+                      This application supports slips from the following banks:
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Badge variant="outline" className="bg-primary/10">
+                        SCB
+                      </Badge>
+                      <Badge variant="outline" className="bg-primary/10">
+                        KBank
+                      </Badge>
+                      <Badge variant="outline" className="bg-primary/10">
+                        BBL
+                      </Badge>
+                      <Badge variant="outline" className="bg-primary/10">
+                        Krungthai
+                      </Badge>
+                    </div>
+                  </div>
                 </div>
 
                 <div
-                  className={`grid gap-4 ${
-                    previewUrl ? "grid-cols-2" : "grid-cols-1"
-                  }`}
+                  className={cn("grid", "gap-4", {
+                    "md:grid-cols-2": previewUrls.length,
+                  })}
                 >
                   <Dropzone
-                    maxFiles={1}
+                    multiple
+                    maxFiles={5}
                     maxSize={2 * 1024 * 1024} // 2MB
                     accept={{
                       "image/*": [".png", ".jpg", ".jpeg"],
@@ -354,28 +476,72 @@ export default function Home() {
                     <DropzoneEmptyState />
                     <DropzoneContent />
                   </Dropzone>
-                  {/* Image Preview */}
-                  {previewUrl && files && files[0] && (
-                    <div className="relative rounded-md overflow-hidden border border-border p-2">
-                      <h1 className="text-sm font-medium mb-2">Preview</h1>
-                      {files[0].type.startsWith("image/") ? (
-                        <div className="relative h-[200px] w-full">
-                          <Image
-                            src={previewUrl}
-                            alt="Preview"
-                            fill
-                            className="object-contain"
-                            sizes="(max-width: 200px) 100vw, 200px"
-                          />
-                        </div>
-                      ) : (
-                        <div className="p-4 text-center bg-muted">
-                          <p className="text-sm text-muted-foreground">
-                            {files[0].name} ({(files[0].size / 1024).toFixed(2)}{" "}
-                            KB)
-                          </p>
+
+                  {/* Image Previews */}
+                  {previewUrls.length > 0 && files && (
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-center">
+                        <h1 className="text-sm font-medium">
+                          Previews ({previewUrls.length})
+                        </h1>
+                        <p className="text-xs text-muted-foreground">
+                          {files.length} file(s) selected
+                        </p>
+                      </div>
+
+                      {/* Thumbnail Navigation */}
+                      {previewUrls.length > 0 && (
+                        <div className="flex gap-2 overflow-x-auto pb-2">
+                          {previewUrls.map((url, index) => (
+                            <div
+                              key={index}
+                              onClick={() => setSelectedPreviewIndex(index)}
+                              className={`relative h-16 w-16 rounded-md overflow-hidden border cursor-pointer ${
+                                index === selectedPreviewIndex
+                                  ? "border-purple-600 border-2"
+                                  : "border-border border-2"
+                              }`}
+                            >
+                              <Image
+                                src={url}
+                                alt={`Thumbnail ${index + 1}`}
+                                fill
+                                className="object-cover"
+                              />
+                            </div>
+                          ))}
                         </div>
                       )}
+
+                      {/* Main Preview */}
+                      <div className="relative rounded-md overflow-hidden border border-border p-2">
+                        {files[selectedPreviewIndex].type.startsWith(
+                          "image/"
+                        ) ? (
+                          <div className="relative h-[200px] w-full">
+                            <Image
+                              src={previewUrls[selectedPreviewIndex]}
+                              alt={`Preview ${selectedPreviewIndex + 1}`}
+                              fill
+                              className="object-contain"
+                              sizes="(max-width: 768px) 100vw, 50vw"
+                            />
+                          </div>
+                        ) : (
+                          <div className="p-4 text-center bg-muted">
+                            <p className="text-sm text-muted-foreground">
+                              {files[selectedPreviewIndex].name} (
+                              {(
+                                files[selectedPreviewIndex].size / 1024
+                              ).toFixed(2)}{" "}
+                              KB)
+                            </p>
+                          </div>
+                        )}
+                        <div className="mt-2 text-xs text-muted-foreground text-center">
+                          {selectedPreviewIndex + 1} of {previewUrls.length}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -410,9 +576,51 @@ export default function Home() {
             </CardHeader>
             <CardContent>
               <div className="grid w-full items-center gap-4">
-                <div className="p-4 bg-muted rounded-md max-h-[300px] overflow-y-auto">
-                  <pre className="whitespace-pre-wrap">{extractedText}</pre>
-                </div>
+                {extractedTexts.length > 0 && (
+                  <div className="space-y-4">
+                    {/* Text Navigation */}
+                    {extractedTexts.length > 1 && (
+                      <div>
+                        <div className="flex justify-between items-center mb-2">
+                          <h1 className="text-sm font-medium">
+                            Extracted Text ({selectedTextIndex + 1} of{" "}
+                            {extractedTexts.length})
+                          </h1>
+                        </div>
+                        <div className="flex gap-2 overflow-x-auto pb-2">
+                          {extractedTexts.map((_, index) => (
+                            <button
+                              key={index}
+                              onClick={() => setSelectedTextIndex(index)}
+                              className={`px-3 py-1 rounded-md text-xs ${
+                                index === selectedTextIndex
+                                  ? "bg-primary text-primary-foreground"
+                                  : "bg-muted text-muted-foreground"
+                              }`}
+                            >
+                              Slip {index + 1}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Text Content */}
+                    <div className="p-4 bg-muted rounded-md max-h-[300px] overflow-y-auto">
+                      <div className="mb-2 text-xs text-muted-foreground">
+                        <span className="font-medium">File:</span>{" "}
+                        {extractedTexts[selectedTextIndex]?.fileName} (
+                        {(
+                          extractedTexts[selectedTextIndex]?.fileSize / 1024
+                        ).toFixed(2)}{" "}
+                        KB)
+                      </div>
+                      <pre className="whitespace-pre-wrap">
+                        {extractedTexts[selectedTextIndex]?.text}
+                      </pre>
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
             <CardFooter className="grid md:grid-cols-2 gap-2">
@@ -435,8 +643,33 @@ export default function Home() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {slipData && (
+              {slipData && slipData.length > 0 && (
                 <div className="space-y-4">
+                  {/* Navigation between processed slips if multiple */}
+                  {slipData.length > 1 && (
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-sm font-medium">
+                        Processed Slip {selectedTextIndex + 1} of{" "}
+                        {slipData.length}
+                      </h3>
+                      <div className="flex gap-2">
+                        {slipData.map((_, index) => (
+                          <button
+                            key={index}
+                            onClick={() => setSelectedTextIndex(index)}
+                            className={`px-3 py-1 rounded-md text-xs ${
+                              index === selectedTextIndex
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground"
+                            }`}
+                          >
+                            Slip {index + 1}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Display the processed slip data */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
@@ -446,10 +679,26 @@ export default function Home() {
                       <div className="space-y-1">
                         <div className="flex justify-between">
                           <span className="text-xs text-muted-foreground">
-                            Bank:
+                            File Name:
                           </span>
                           <span className="text-xs font-medium">
-                            {slipData.bank}
+                            {slipData[selectedTextIndex]?.file_name || "N/A"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-xs text-muted-foreground">
+                            Bank From:
+                          </span>
+                          <span className="text-xs font-medium">
+                            {slipData[selectedTextIndex]?.bank_from || "N/A"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-xs text-muted-foreground">
+                            Bank To:
+                          </span>
+                          <span className="text-xs font-medium">
+                            {slipData[selectedTextIndex]?.bank_to || "N/A"}
                           </span>
                         </div>
                         <div className="flex justify-between">
@@ -457,7 +706,7 @@ export default function Home() {
                             Status:
                           </span>
                           <span className="text-xs font-medium">
-                            {slipData.status}
+                            {slipData[selectedTextIndex]?.status || "N/A"}
                           </span>
                         </div>
                         <div className="flex justify-between">
@@ -465,15 +714,35 @@ export default function Home() {
                             Date/Time:
                           </span>
                           <span className="text-xs font-medium">
-                            {slipData.date_time}
+                            {slipData[selectedTextIndex]?.date_time_text ||
+                              "N/A"}
                           </span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-xs text-muted-foreground">
-                            Reference:
+                            Reference Number:
                           </span>
                           <span className="text-xs font-medium">
-                            {slipData.transaction_reference}
+                            {slipData[selectedTextIndex]?.reference_number ||
+                              "N/A"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-xs text-muted-foreground">
+                            Transaction Reference:
+                          </span>
+                          <span className="text-xs font-medium">
+                            {slipData[selectedTextIndex]
+                              ?.transaction_reference || "N/A"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-xs text-muted-foreground">
+                            Reference Code:
+                          </span>
+                          <span className="text-xs font-medium">
+                            {slipData[selectedTextIndex]?.reference_code ||
+                              "N/A"}
                           </span>
                         </div>
                         <div className="flex justify-between">
@@ -481,8 +750,23 @@ export default function Home() {
                             Amount:
                           </span>
                           <span className="text-xs font-medium">
-                            {slipData.amount.toLocaleString()}{" "}
-                            {slipData.currency}
+                            {slipData[selectedTextIndex]?.amount
+                              ? slipData[
+                                  selectedTextIndex
+                                ].amount.toLocaleString()
+                              : "0"}{" "}
+                            {slipData[selectedTextIndex]?.currency || "THB"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-xs text-muted-foreground">
+                            Fee:
+                          </span>
+                          <span className="text-xs font-medium">
+                            {slipData[selectedTextIndex]?.fee
+                              ? slipData[selectedTextIndex].fee.toLocaleString()
+                              : "0"}{" "}
+                            {slipData[selectedTextIndex]?.currency || "THB"}
                           </span>
                         </div>
                       </div>
@@ -496,7 +780,7 @@ export default function Home() {
                             Name:
                           </span>
                           <span className="text-xs font-medium">
-                            {slipData.from.name}
+                            {slipData[selectedTextIndex]?.from?.name || "N/A"}
                           </span>
                         </div>
                         <div className="flex justify-between">
@@ -504,31 +788,35 @@ export default function Home() {
                             Account:
                           </span>
                           <span className="text-xs font-medium">
-                            {slipData.from.account_number}
+                            {slipData[selectedTextIndex]?.from
+                              ?.account_number || "N/A"}
                           </span>
                         </div>
                       </div>
 
                       <h3 className="text-sm font-medium mt-4 mb-2">To</h3>
                       <div className="space-y-1">
-                        {Object.entries(slipData.to).map(([key, value]) => {
-                          const customField = customFields.find(
-                            (f) => f.originalField === `to.${key}`
-                          );
-                          return (
-                            <div
-                              key={key}
-                              className="flex justify-between items-center"
-                            >
-                              <span className="text-xs text-muted-foreground">
-                                {customField?.displayName || key}:
-                              </span>
-                              <span className="text-xs font-medium">
-                                {value}
-                              </span>
-                            </div>
-                          );
-                        })}
+                        {slipData[selectedTextIndex]?.to &&
+                          Object.entries(slipData[selectedTextIndex].to).map(
+                            ([key, value]) => {
+                              const customField = customFields.find(
+                                (f) => f.originalField === `to.${key}`
+                              );
+                              return (
+                                <div
+                                  key={key}
+                                  className="flex justify-between items-center"
+                                >
+                                  <span className="text-xs text-muted-foreground">
+                                    {customField?.displayName || key}:
+                                  </span>
+                                  <span className="text-xs font-medium">
+                                    {value}
+                                  </span>
+                                </div>
+                              );
+                            }
+                          )}
                       </div>
                     </div>
                   </div>
@@ -561,11 +849,18 @@ export default function Home() {
                                 <TableCell className="font-medium">
                                   {index + 1}
                                 </TableCell>
-                                <TableCell>{slip.date_time}</TableCell>
-                                <TableCell>{slip.from.name}</TableCell>
-                                <TableCell>{slip.to.name || "N/A"}</TableCell>
+                                <TableCell>
+                                  {slip.date_time_text || "N/A"}
+                                </TableCell>
+                                <TableCell>
+                                  {slip.from?.name || "N/A"}
+                                </TableCell>
+                                <TableCell>{slip.to?.name || "N/A"}</TableCell>
                                 <TableCell className="text-right">
-                                  {slip.amount.toLocaleString()} {slip.currency}
+                                  {slip.amount
+                                    ? slip.amount.toLocaleString()
+                                    : "0"}{" "}
+                                  {slip.currency || "THB"}
                                 </TableCell>
                               </TableRow>
                             ))}
