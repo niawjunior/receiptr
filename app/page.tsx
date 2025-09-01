@@ -138,14 +138,14 @@ export default function Home() {
       // Combine existing files with new ones
       const combinedFiles = [...prevFiles, ...acceptedFiles];
 
-      // Limit to 5 files maximum
-      const limitedFiles = combinedFiles.slice(0, 5);
+      // Limit to 3 files maximum
+      const limitedFiles = combinedFiles.slice(0, 3);
 
       // Show toast if files were limited
-      if (combinedFiles.length > 5) {
+      if (combinedFiles.length > 3) {
         toast.info(
-          `Only 5 files allowed. ${
-            combinedFiles.length - 5
+          `Only 3 files allowed. ${
+            combinedFiles.length - 3
           } file(s) were not added.`
         );
       }
@@ -459,7 +459,7 @@ export default function Home() {
                 >
                   <Dropzone
                     multiple
-                    maxFiles={5}
+                    maxFiles={3}
                     maxSize={2 * 1024 * 1024} // 2MB
                     accept={{
                       "image/*": [".png", ".jpg", ".jpeg"],
