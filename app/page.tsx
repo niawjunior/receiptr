@@ -338,7 +338,7 @@ export default function Home() {
                 >
                   <Dropzone
                     maxFiles={1}
-                    maxSize={10 * 1024 * 1024} // 10MB
+                    maxSize={2 * 1024 * 1024} // 2MB
                     accept={{
                       "image/*": [".png", ".jpg", ".jpeg"],
                     }}
