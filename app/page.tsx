@@ -429,8 +429,8 @@ export default function Home() {
                         <AvatarFallback>BBL</AvatarFallback>
                       </Avatar>
                       <Avatar>
-                        <AvatarImage src="/KRungsri.svg" />
-                        <AvatarFallback>KRungsri</AvatarFallback>
+                        <AvatarImage src="/Krungsri.svg" />
+                        <AvatarFallback>Krungsri</AvatarFallback>
                       </Avatar>
                     </div>
                   </div>
