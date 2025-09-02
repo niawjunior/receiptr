@@ -2,12 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { generateObject } from "ai";
 import { openai } from "@ai-sdk/openai";
+import {
+  SYSTEM_PROMPT_BBL,
+  SYSTEM_PROMPT_GENERIC,
+  SYSTEM_PROMPT_KRUNGSRI,
+  SYSTEM_PROMPT_SCB,
+} from "./prompts";
 
 /**
  * Zod schema for a single normalized slip
  */
 const SlipSchema = z.object({
-  // Keep linkage to the original upload
+  // Link back to the upload
   source_id: z.string().default("").describe("Original slip id from input"),
   file_name: z.string().default("").describe("Original file name if available"),
 
@@ -37,27 +43,18 @@ const SlipSchema = z.object({
   // Parties
   from: z
     .object({
-      name: z.string().default("").describe("Name of sender"),
-      account_number: z
-        .string()
-        .default("")
-        .describe("Account number of sender"),
+      name: z.string().default(""),
+      account_number: z.string().default(""),
     })
     .optional(),
 
   to: z
     .object({
-      name: z.string().default("").describe("Name of recipient"),
-      account_number: z
-        .string()
-        .default("")
-        .describe("Account number of recipient"),
-      biller_id: z.string().default("").describe("Biller ID of recipient"),
-      store_code: z.string().default("").describe("Store code of recipient"),
-      transaction_code: z
-        .string()
-        .default("")
-        .describe("Transaction code of recipient"),
+      name: z.string().default(""),
+      account_number: z.string().default(""),
+      biller_id: z.string().default(""),
+      store_code: z.string().default(""),
+      transaction_code: z.string().default(""),
     })
     .optional(),
 
@@ -66,46 +63,34 @@ const SlipSchema = z.object({
   currency: z.string().default("THB").describe("Currency"),
   fee: z.number().default(0).describe("Fee in THB"),
 
-  // References (handle common Thai labels)
+  // References
   transaction_reference: z
     .string()
     .default("")
     .describe("เลขที่รายการ / หมายเลขอ้างอิง / เลขที่อ้างอิง"),
-  reference_number: z.string().default("").describe("Reference number"),
-  reference_code: z.string().default("").describe("Reference code"),
+  reference_number: z.string().default(""),
+  reference_code: z.string().default(""),
 
   // Misc
-  qr_code: z.string().default("").describe("QR code"),
+  qr_code: z.string().default(""),
 });
 
 /**
- * System prompt (single-slip)
- * Keep it strict and bank-agnostic. Thai + EN.
+ * System prompt (bank-agnostic). Push all logic here.
  */
-const SYSTEM_PROMPT = `
-You are an expert OCR normalizer for Thai bank payment slips (SCB, KBank, BBL, Krungthai, etc.).
 
-TASK
-- Extract only fields that are explicitly present. Do not guess or infer.
-- If a field cannot be found, return an empty string "" (or 0 for amount/fee).
-- Parse Thai or English dates and normalize to ISO 8601 in Asia/Bangkok (e.g., 2025-08-22T13:21:00+07:00) in "date_time_iso".
-- Keep the original date string in "date_time_text".
-- Remove currency symbols and commas from numeric fields; "amount" and "fee" are numbers.
-- Map "เลขที่รายการ", "หมายเลขอ้างอิง", "เลขที่อ้างอิง", "reference", "ref no." into the reference fields as appropriate.
-- If bank names are shown for both parties, set "bank_from" and "bank_to". Otherwise leave them empty.
-- Respect masking: if an account shows as XXX-X-XXXX-X, keep the same masked format in "account_number".
-- For QR payments, look for text after "ไปยัง" (meaning "to") and before any Biller ID or store code as the recipient name. For example, if you see "ไปยัง\n\nQR Payment at BTS", then "QR Payment at BTS" is the recipient name.
-- Never include explanations, just compliant JSON.
+function choosePrompt(raw: string) {
+  const t = raw.toLowerCase();
+  if (t.includes("scb") || t.includes("ไทยพาณิชย์")) return SYSTEM_PROMPT_SCB;
+  if (t.includes("bangkok bank") || t.includes("ธนาคารกรุงเทพ"))
+    return SYSTEM_PROMPT_BBL;
+  if (t.includes("krungsri") || t.includes("กรุงศรี"))
+    return SYSTEM_PROMPT_KRUNGSRI;
+  // fallback (generic)
+  return SYSTEM_PROMPT_GENERIC;
+}
 
-DATE EXAMPLES
-- "1 ส.ค. 68 08:33 น." -> interpret BE/AD correctly. If year seems two-digit, assume Thai slips often show Buddhist Era; convert to Gregorian if it is clearly BE. If unclear, preserve in "date_time_text" and best-effort ISO using AD if pattern indicates AD (e.g., Western bank UIs like BBL app usually AD).
-- "22 ส.ค. 68, 13:21"
-- "2025-08-22 13:21"
-`;
-
-/**
- * Builds a per-slip user prompt with just the needed text chunk to keep tokens small.
- */
+/** Build a minimal per-slip user prompt with the raw text only */
 function buildUserPromptForSlip(
   text: string,
   meta: { id: string; fileName?: string }
@@ -113,19 +98,16 @@ function buildUserPromptForSlip(
   return `
 <INPUT_SLIP>
 ID: ${meta.id}
-FILE_NAME: ${meta?.fileName ?? ""}
+FILE_NAME: ${meta.fileName ?? ""}
 
 RAW_TEXT:
 ${text}
 </INPUT_SLIP>
 
-Return a single JSON object per the schema.
-`;
+Return a single JSON object per the schema. Do not include explanations.`;
 }
 
-/**
- * Wrap generateObject for a SINGLE slip to avoid token bloat and to parallelize safely.
- */
+/** Extract a SINGLE slip (no manual preprocessing) */
 async function extractOneSlip({
   id,
   text,
@@ -135,19 +117,23 @@ async function extractOneSlip({
   text: string;
   fileName?: string;
 }) {
+  const textContent = text.toLowerCase();
+  const systemPrompt = choosePrompt(textContent);
+
   const { object } = await generateObject({
     model: openai("gpt-4o-mini"),
     output: "object",
     schema: SlipSchema,
-    system: SYSTEM_PROMPT,
+    system: systemPrompt,
     prompt: buildUserPromptForSlip(text, { id, fileName }),
+    // Optional: encourage determinism
+    // temperature: 0,
   });
 
-  // Ensure linkage is present
   return {
     ...object,
-    source_id: id,
-    file_name: fileName ?? "",
+    source_id: id || object.source_id || "",
+    file_name: fileName ?? object.file_name ?? "",
   };
 }
 
@@ -160,7 +146,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No text provided" }, { status: 400 });
     }
 
-    // Defensive: only pick fields we actually use
     const items = texts
       .map((t: any) => ({
         id: String(t?.id ?? ""),
@@ -176,10 +161,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Batch per slip to keep context small and handle many images
+    // Process each slip independently (robust for many images)
     const results = await Promise.all(items.map(extractOneSlip));
 
-    // Optionally, light post-normalization for numeric safety
+    // Minimal post-normalization; keep logic light
     const safeResults = results.map((r) => ({
       ...r,
       amount: Number.isFinite(r.amount) ? r.amount : 0,

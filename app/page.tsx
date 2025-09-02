@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 // Define the structure for slip data
 interface SCBSlipData {
@@ -71,8 +72,6 @@ interface ExtractedTextData {
 export default function Home() {
   const [files, setFiles] = useState<File[] | undefined>();
   const [isUploading, setIsUploading] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [extractedTexts, setExtractedTexts] = useState<ExtractedTextData[]>([]);
   const [selectedTextIndex, setSelectedTextIndex] = useState<number>(0);
   const [slipData, setSlipData] = useState<SCBSlipData[] | null>(null);
   const [processedSlips, setProcessedSlips] = useState<SCBSlipData[]>([]);
@@ -161,14 +160,13 @@ export default function Home() {
     }
 
     setIsUploading(true);
-    // Clear any previous extracted texts
-    setExtractedTexts([]);
 
     try {
       let processedCount = 0;
       let successCount = 0;
+      const extractedTextItems: ExtractedTextData[] = [];
 
-      // Process each file sequentially for OCR only
+      // Process each file sequentially for OCR
       for (const file of files) {
         try {
           // Update processing status
@@ -195,16 +193,16 @@ export default function Home() {
 
           const ocrData = await ocrResponse.json();
 
-          // Store extracted text from OCR response as an object
-          setExtractedTexts((prev) => [
-            ...prev,
-            {
-              id: `slip-${Date.now()}-${processedCount}`,
-              text: ocrData.text,
-              fileName: file.name,
-              fileSize: file.size,
-            },
-          ]);
+          // Store extracted text from OCR response
+          const extractedItem = {
+            id: `slip-${Date.now()}-${processedCount}`,
+            text: ocrData.text,
+            fileName: file.name,
+            fileSize: file.size,
+          };
+
+          extractedTextItems.push(extractedItem);
+
           successCount++;
           processedCount++;
         } catch (error) {
@@ -223,12 +221,48 @@ export default function Home() {
         }
       }
 
-      // Navigate to process page if any texts were successfully extracted
+      // If any texts were successfully extracted, process them with AI
       if (successCount > 0) {
-        setActiveTab("process");
         toast.success(
-          `Successfully extracted text from ${successCount} of ${files.length} images`
+          `Successfully extracted text from ${successCount} of ${files.length} images. Processing with AI...`
         );
+
+        try {
+          // Call our AI classification API endpoint
+          const classifyResponse = await fetch("/api/classify", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              texts: extractedTextItems,
+            }),
+          });
+
+          if (!classifyResponse.ok) {
+            const errorData = await classifyResponse.json();
+            throw new Error(errorData.error || "Failed to classify text");
+          }
+
+          const data: { slips: SCBSlipData[] } = await classifyResponse.json();
+          setSlipData(data.slips);
+
+          // Add the processed slip to our collection
+          setProcessedSlips((prev) => [...prev, ...data.slips]);
+
+          setActiveTab("result");
+          toast.success("Processing complete", {
+            description: `${successCount} slip(s) processed successfully.`,
+          });
+        } catch (error) {
+          console.error("Error processing text:", error);
+          toast.error("Error processing text", {
+            description:
+              error instanceof Error
+                ? error.message
+                : "There was a problem classifying the extracted text.",
+          });
+        }
       } else {
         toast.error("No text could be extracted from the images");
       }
@@ -242,59 +276,12 @@ export default function Home() {
     }
   };
 
-  const handleProcess = async () => {
-    if (extractedTexts.length === 0) return;
-
-    setIsProcessing(true);
-    try {
-      // Call our AI classification API endpoint
-      const classifyResponse = await fetch("/api/classify", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          texts: extractedTexts,
-        }),
-      });
-
-      if (!classifyResponse.ok) {
-        const errorData = await classifyResponse.json();
-        throw new Error(errorData.error || "Failed to classify text");
-      }
-
-      const data: { slips: SCBSlipData[] } = await classifyResponse.json();
-      setSlipData(data.slips);
-
-      // Add the processed slip to our collection
-      setProcessedSlips((prev) => [...prev, ...data.slips]);
-
-      setActiveTab("result");
-      toast.success("Processing complete", {
-        description: `Slip ${
-          selectedTextIndex + 1
-        } has been processed successfully.`,
-      });
-    } catch (error) {
-      console.error("Error processing text:", error);
-      toast.error("Error processing text", {
-        description:
-          error instanceof Error
-            ? error.message
-            : "There was a problem classifying the extracted text.",
-      });
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
   // Handle adding another slip
   const handleAddAnotherSlip = () => {
     // Reset for next slip
     setFiles(undefined);
     setPreviewUrls([]);
     setSelectedPreviewIndex(0);
-    setExtractedTexts([]);
     setSelectedTextIndex(0);
     setSlipData([]);
     setActiveTab("upload");
@@ -409,11 +396,8 @@ export default function Home() {
         onValueChange={setActiveTab}
         className="max-w-3xl mx-auto"
       >
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="upload">Upload</TabsTrigger>
-          <TabsTrigger value="process" disabled={extractedTexts.length === 0}>
-            Process
-          </TabsTrigger>
           <TabsTrigger value="result" disabled={!slipData}>
             Result
           </TabsTrigger>
@@ -436,18 +420,18 @@ export default function Home() {
                       This application supports slips from the following banks:
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      <Badge variant="outline" className="bg-primary/10">
-                        SCB
-                      </Badge>
-                      <Badge variant="outline" className="bg-primary/10">
-                        KBank
-                      </Badge>
-                      <Badge variant="outline" className="bg-primary/10">
-                        BBL
-                      </Badge>
-                      <Badge variant="outline" className="bg-primary/10">
-                        Krungthai
-                      </Badge>
+                      <Avatar>
+                        <AvatarImage src="/SCB.svg" />
+                        <AvatarFallback>SCB</AvatarFallback>
+                      </Avatar>
+                      <Avatar>
+                        <AvatarImage src="/BBL.svg" />
+                        <AvatarFallback>BBL</AvatarFallback>
+                      </Avatar>
+                      <Avatar>
+                        <AvatarImage src="/KRungsri.svg" />
+                        <AvatarFallback>KRungsri</AvatarFallback>
+                      </Avatar>
                     </div>
                   </div>
                 </div>
@@ -560,75 +544,7 @@ export default function Home() {
                 onClick={handleUpload}
                 disabled={!files || files.length === 0 || isUploading}
               >
-                {isUploading ? "Uploading..." : "Upload & Extract Text"}
-              </Button>
-            </CardFooter>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="process">
-          <Card>
-            <CardHeader>
-              <CardTitle>Extracted Text</CardTitle>
-              <CardDescription>
-                Review the extracted text and process it with AI.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid w-full items-center gap-4">
-                {extractedTexts.length > 0 && (
-                  <div className="space-y-4">
-                    {/* Text Navigation */}
-                    {extractedTexts.length > 1 && (
-                      <div>
-                        <div className="flex justify-between items-center mb-2">
-                          <h1 className="text-sm font-medium">
-                            Extracted Text ({selectedTextIndex + 1} of{" "}
-                            {extractedTexts.length})
-                          </h1>
-                        </div>
-                        <div className="flex gap-2 overflow-x-auto pb-2">
-                          {extractedTexts.map((_, index) => (
-                            <button
-                              key={index}
-                              onClick={() => setSelectedTextIndex(index)}
-                              className={`px-3 py-1 rounded-md text-xs ${
-                                index === selectedTextIndex
-                                  ? "bg-primary text-primary-foreground"
-                                  : "bg-muted text-muted-foreground"
-                              }`}
-                            >
-                              Slip {index + 1}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Text Content */}
-                    <div className="p-4 bg-muted rounded-md max-h-[300px] overflow-y-auto">
-                      <div className="mb-2 text-xs text-muted-foreground">
-                        <span className="font-medium">File:</span>{" "}
-                        {extractedTexts[selectedTextIndex]?.fileName} (
-                        {(
-                          extractedTexts[selectedTextIndex]?.fileSize / 1024
-                        ).toFixed(2)}{" "}
-                        KB)
-                      </div>
-                      <pre className="whitespace-pre-wrap">
-                        {extractedTexts[selectedTextIndex]?.text}
-                      </pre>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-            <CardFooter className="grid md:grid-cols-2 gap-2">
-              <Button variant="outline" onClick={() => setActiveTab("upload")}>
-                Back
-              </Button>
-              <Button onClick={handleProcess} disabled={isProcessing}>
-                {isProcessing ? "Processing..." : "Process with AI"}
+                {isUploading ? "Processing..." : "Upload & Process"}
               </Button>
             </CardFooter>
           </Card>
@@ -884,7 +800,7 @@ export default function Home() {
               )}
             </CardContent>
             <CardFooter className="grid md:grid-cols-3 auto-cols-fr gap-2">
-              <Button variant="outline" onClick={() => setActiveTab("process")}>
+              <Button variant="outline" onClick={() => setActiveTab("upload")}>
                 Back
               </Button>
               {processedSlips.length > 0 && (
