@@ -386,8 +386,7 @@ export default function Home() {
       <div className="flex flex-col items-center justify-center mb-8">
         <h1 className="text-3xl font-bold mb-2">Sliptr</h1>
         <p className="text-muted-foreground text-center">
-          Upload your slip image and let AI extract, classify, and organize the
-          information for you.
+          Drop a slip. One click. Instant AI results. No login.
         </p>
       </div>
 
